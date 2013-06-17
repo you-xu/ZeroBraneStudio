@@ -1,6 +1,9 @@
 -- authors: Lomtik Software (J. Winwood & John Labenski)
 -- Luxinia Dev (Eike Decker & Christoph Kubisch)
 ---------------------------------------------------------
+
+require("LuaExt")
+
 local ide = ide
 local frame = ide.frame
 local menuBar = frame.menuBar
@@ -209,10 +212,182 @@ local function runInterpreter(wfilename, withdebugger)
   return debugger.pid
 end
 
-function ProjectRun(skipcheck)
-  local fname = getNameToRun(skipcheck)
-  if not fname then return end
-  return runInterpreter(fname)
+local function GetDeviceIpConfig()
+  local file = io.open("GetDeviceIpConfig","rb")
+  if not file then
+    return "127.0.0.1"
+  end
+  local ip = file:read("*a")
+  io.close(file)
+  return ip
+end
+
+local function SetDeviceIpConfig(ip)
+  local file = io.open("GetDeviceIpConfig","w+")
+  if not file then
+    return
+  end
+  file:write(ip)
+  io.close(file)
+end
+
+local function GetDeviceIp()
+
+  local mousePos = wx.wxGetMousePosition()
+  local dlg  = wx.wxDialog( frame, wx.wxID_ANY, TR("your program"), wx.wxPoint(mousePos.x-200,mousePos.y-50), wx.wxSize( 246, 80))
+  local edit = wx.wxTextCtrl( dlg, ID("device.ip"), GetDeviceIpConfig(), wx.wxPoint( 20, 20), wx.wxSize( 130, 20))
+  local btn_ok = wx.wxButton( dlg, ID("ok"), "OK", wx.wxPoint(160,20))
+  
+  local canceld = false;
+  
+  dlg:Connect( ID("ok"), wx.wxEVT_COMMAND_BUTTON_CLICKED,
+  function (event)
+    dlg:EndModal(0)
+  end)
+
+  dlg:Connect( wx.wxEVT_CLOSE_WINDOW,
+  function (event)
+    canceld = true;
+    dlg:EndModal(0)
+  end)
+
+  dlg:SetAutoLayout(true)
+  dlg:ShowModal()
+  local deviceIp = edit:GetValue()
+  dlg:Destroy()
+
+  if not canceld then
+    return deviceIp
+  else
+    return nil
+  end
+
+end
+
+local timer = nil
+local handler = nil
+local processBar = nil
+
+local function split(fullString, separator)
+    local nFindStartIndex = 1
+    local nSplitIndex = 1
+    local nSplitArray = {}
+    while true do
+       local nFindLastIndex = string.find(fullString, separator, nFindStartIndex)
+       if not nFindLastIndex then
+        nSplitArray[nSplitIndex] = string.sub(fullString, nFindStartIndex, string.len(fullString))
+        break
+       end
+       nSplitArray[nSplitIndex] = string.sub(fullString, nFindStartIndex, nFindLastIndex - 1)
+       nFindStartIndex = nFindLastIndex + string.len(separator)
+       nSplitIndex = nSplitIndex + 1
+    end
+    return nSplitArray
+end
+
+
+function ProjectRun(command)
+  		
+      -- local array = GenerateFucntionList()
+      -- for k,v in pairs(array) do
+      --   DisplayOutputLn(k.." "..v)
+      -- end
+      -- DisplayOutputLn("position of nit () is "..array["init ()"])
+      -- JumpToLine(array["init ()"])
+			
+      local projectdir = ide.config.path.projectdir
+      local deviceIp   = GetDeviceIp()
+      
+      if deviceIp ~= nil then
+      	SetDeviceIpConfig( deviceIp ) 
+      	if ClearOutput then ClearOutput() end
+      	os.execute("start " .. deviceIp .. " " .. command)
+      	return
+      end
+      
+      -- nil means user close the ip setting dialog
+      if deviceIp ~= nil then
+
+      SetDeviceIpConfig( deviceIp ) 
+      Deployer:Deploy( projectdir, deviceIp .. command )
+      
+      local strTaskName;
+      local percentage;
+      local finished = false
+
+      local function onTimer()
+        
+          local log = Deployer:ReadLog()
+          if log~="null" then
+            DisplayOutputLn( "info:" .. log )
+          end
+
+          if finished then return end
+          if  timer ==nil then return end
+          if  processBar ==nil then return end
+          if  handler ==nil then return end
+
+          strTaskName = Deployer:GetDeployStatus()
+          percentage  = Deployer:GetDeployPercentage() 
+            
+          local function Dissmiss()
+             finished = ture
+             if  timer ==nil then return end
+             if  processBar ==nil then return end
+             if  handler ==nil then return end
+             if command=="" then
+                timer:Stop()
+                timer = nil
+                handler = nil
+             end
+             processBar: Destroy();
+             processBar = nil
+          end
+          
+          if finished then return end
+          
+          if percentage==100 then percentage=99 end
+          
+          local continue, skip = processBar:Update( percentage,  strTaskName )
+          if  not continue then
+             Dissmiss()
+             return
+          end
+                
+          if strTaskName == "Finished" then 
+            Dissmiss()
+            return
+          end
+      end
+       
+      if timer ~= nil then
+        timer:Stop()
+        timer=nil
+      end
+      
+      if handler~=nil then handler = nil end
+      
+	    handler = wx.wxEvtHandler()
+	    timer   = wx.wxTimer(handler)     
+	    timer:Start(10);
+	    handler:Connect( wx.wxEVT_TIMER, onTimer)
+
+		  processBar = wx.wxProgressDialog( 
+          "Please wait",    
+          "Prepareing...                                                ", 100, wx.NULL, wx.wxPD_CAN_ABORT+wx.wxPD_SMOOTH)
+        
+    end
+end
+
+function ProjectStop(skipcheck)
+    if timer~=nil then
+      timer:Stop()
+      timer = nil
+    end
+    if handler~= nil then
+      handler = nil
+    end
+    Deployer:StopExecution()
 end
 
 local debuggers = {
@@ -230,17 +405,31 @@ function ProjectDebug(skipcheck, debtype)
       debugger.run()
     end
   else
-    local debcall = (debuggers[debtype or "debug"]):
-      format(ide.debugger.hostname, ide.debugger.portnumber)
-    local fname = getNameToRun(skipcheck)
-    if not fname then return end
-    return runInterpreter(fname, debcall) -- this may be pid or nil
+    
+    ProjectRun("-d")
+    
+    return false
+
   end
   return true
 end
 
 -----------------------
 -- Actions
+
+frame:Connect(ID_START, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectRun("-r") end)
+frame:Connect(ID_START, wx.wxEVT_UPDATE_UI,
+  function (event)
+    local editor = GetEditor()
+    event:Enable((debugger.server == nil and debugger.pid == nil) and (editor ~= nil))
+  end)
+
+frame:Connect(ID_STOP, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectStop() end)
+frame:Connect(ID_STOP, wx.wxEVT_UPDATE_UI,
+  function (event)
+    local editor = GetEditor()
+    event:Enable((debugger.server == nil and debugger.pid == nil) and (editor ~= nil))
+  end)
 
 frame:Connect(ID_TOGGLEBREAKPOINT, wx.wxEVT_COMMAND_MENU_SELECTED,
   function ()
@@ -267,7 +456,7 @@ frame:Connect(ID_COMPILE, wx.wxEVT_UPDATE_UI,
     event:Enable((debugger.server == nil and debugger.pid == nil) and (editor ~= nil))
   end)
 
-frame:Connect(ID_RUN, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectRun() end)
+frame:Connect(ID_RUN, wx.wxEVT_COMMAND_MENU_SELECTED, function () ProjectRun("-r") end)
 frame:Connect(ID_RUN, wx.wxEVT_UPDATE_UI,
   function (event)
     local editor = GetEditor()

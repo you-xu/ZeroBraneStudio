@@ -873,8 +873,127 @@ function CreateEditor()
       editor.ev = {}
     end)
 
+local function __split(fullString, separator)
+    local nFindStartIndex = 1
+    local nSplitIndex = 1
+    local nSplitArray = {}
+    while true do
+       local nFindLastIndex = string.find(fullString, separator, nFindStartIndex)
+       if not nFindLastIndex then
+        nSplitArray[nSplitIndex] = string.sub(fullString, nFindStartIndex, string.len(fullString))
+        break
+       end
+       nSplitArray[nSplitIndex] = string.sub(fullString, nFindStartIndex, nFindLastIndex - 1)
+       nFindStartIndex = nFindLastIndex + string.len(separator)
+       nSplitIndex = nSplitIndex + 1
+    end
+    return nSplitArray
+end
+
+function _OnJumpToFunctionDefinition(item)
+    
+    local lenofprojdir = #(ide.config.path.projectdir)
+    
+    local _functionDefs = __split( item, "@#")
+    
+    if #_functionDefs > 1 then 
+      result = {}
+      --DisplayOutputLn("Muilty values:")
+      for i,v in ipairs(_functionDefs) do
+        --DisplayOutputLn(tostring(i)..": "..v)
+        --local t = __split( item, "@")
+        result[string.sub(v, lenofprojdir+1, #v)] = v
+      end
+      ShowMuiltyAltJumpList( result )
+      return
+    end
+
+    functionDefs = __split( item, "@")
+    LoadFile( functionDefs[1], nil, true)
+    
+    local l = tonumber(functionDefs[3])
+    
+    if (l and l > 0) then
+      local editor = GetEditor()
+      editor:GotoLine(l)
+    end
+    
+end
+        
+local function extension( str )
+  local I=0
+  local dot="."
+  for i=#str,0,-1 do    
+    if str:byte(i)==dot:byte(1) then
+        I=i
+        break
+    end
+  end
+  I=I+1    
+  return string.sub( str, I, #str)
+end
+
+        
+function _GenGloableFuncList()
+  
+    local ret = Deployer:IndexFunctionDefine(ide.config.path.projectdir)
+    local funcList =  __split( ret, "\n")
+    local functionDefs = nil
+    local result = {}
+    for i,v in ipairs(funcList) do
+      
+        functionDefs = __split( v, "@")
+        
+        if functionDefs[2] == "indexing, please try angin!" then
+          return {}
+        end
+        
+        funcdef = __split( functionDefs[2], "%(" )
+        key = funcdef[1]
+        
+        funcdef = __split( key, ":" )
+        key = funcdef[#funcdef]
+                
+        key = extension( key)
+      
+        if not result[key] then
+            result[key]=v
+        else
+            result[key]=result[key].."@#"..v
+            --DisplayOutputLn( result[key].."duplicate with "..v )
+        end
+    end
+    return result
+end
+
+
+  
+local function clicked()
+  local mpos = wx.wxGetMousePosition()
+  local cpos = editor:ScreenToClient(mpos)
+  local position = editor:PositionFromPointClose(cpos.x, cpos.y)
+  if position ~= wxstc.wxSTC_INVALID_POSITION then
+     local var, linetxtopos = getValAtPosition( editor, position)
+     if var then
+        var = extension(var)
+--      DisplayOutputLn(" try to jump to symbol :"..var)
+        local array = _GenGloableFuncList()
+        if array[var] ~= nil then
+            _OnJumpToFunctionDefinition(array[var])
+--          DisplayOutputLn(" found:"..array[var])
+        else
+--          DisplayOutputLn(" not found key:"..var)
+        end
+     end
+  end
+end
   editor:Connect(wx.wxEVT_LEFT_DOWN,
     function (event)
+      
+      if event:AltDown() then
+        clicked()
+        return
+      end
       if MarkupHotspotClick then
         local position = editor:PositionFromPointClose(event:GetX(),event:GetY())
         if position ~= wxstc.wxSTC_INVALID_POSITION then
@@ -898,6 +1017,7 @@ function CreateEditor()
   editor:Connect(wx.wxEVT_SET_FOCUS,
     function (event)
       event:Skip()
+      HideSearchWindow()
       if inhandler or ide.exitingProgram then return end
       inhandler = true
       isFileAlteredOnDisk(editor)
@@ -909,8 +1029,13 @@ function CreateEditor()
       local keycode = event:GetKeyCode()
       local mod = event:GetModifiers()
       local first, last = 0, notebook:GetPageCount()-1
-      if keycode == wx.WXK_ESCAPE and ide.frame:IsFullScreen() then
-        ShowFullScreen(false)
+      if keycode == wx.WXK_ESCAPE  then
+        if frame:IsFullScreen() then
+          ShowFullScreen(false)
+        else
+          HideSearchWindow()
+          event:Skip()
+        end
       -- Ctrl-Home and Ctrl-End don't work on OSX with 2.9.5+; fix it
       elseif ide.osname == 'Macintosh' and ide.wxver >= "2.9.5"
         and (mod == wx.wxMOD_RAW_CONTROL or mod == (wx.wxMOD_RAW_CONTROL + wx.wxMOD_SHIFT))

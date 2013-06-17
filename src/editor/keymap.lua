@@ -90,6 +90,8 @@ ide.config.keymap = {
 -- Editor popup menu items
   [ID_QUICKADDWATCH]    = "",
   [ID_QUICKEVAL]        = "",
+  [ID_JUMP_TO_FILE]     = "F4",
+  [ID_JUMP_TO_FUNCTION] = "F3",
 }
 
 function KSC(id, default)
